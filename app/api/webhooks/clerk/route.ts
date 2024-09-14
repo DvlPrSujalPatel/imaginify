@@ -87,7 +87,7 @@ export async function POST(req: Request) {
 
   // If any required headers are missing, return an error
   if (!svix_id || !svix_timestamp || !svix_signature) {
-    return new Response("Error occurred -- no svix headers", {
+    return new Response("Error occurred -- missing svix headers", {
       status: 400,
     });
   }
@@ -119,63 +119,89 @@ export async function POST(req: Request) {
   const { id } = evt.data;
   const eventType = evt.type;
 
-  // Handle the user created event
-  if (eventType === "user.created") {
-    const { id, email_addresses, image_url, first_name, last_name, username } =
-      evt.data as UserCreatedEventData;
+  try {
+    // Handle the user created event
+    if (eventType === "user.created") {
+      const {
+        id,
+        email_addresses,
+        image_url,
+        first_name,
+        last_name,
+        username,
+      } = evt.data as UserCreatedEventData;
 
-    const user: User = {
-      clerkId: id,
-      email: email_addresses[0].email_address,
-      username: username!,
-      firstName: first_name,
-      lastName: last_name,
-      photo: image_url,
-    };
+      const user: User = {
+        clerkId: id,
+        email: email_addresses?.[0]?.email_address ?? null,
+        username: username ?? "Anonymous",
+        firstName: first_name ?? "",
+        lastName: last_name ?? "",
+        photo: image_url ?? "",
+      };
 
-    const newUser = await createUser(user);
+      const newUser = await createUser(user);
 
-    // Set public metadata
-    if (newUser) {
-      await clerkClient.users.updateUserMetadata(id, {
-        publicMetadata: {
-          userId: newUser.clerkId,
-        },
-      });
+      // Set public metadata
+      if (newUser) {
+        try {
+          await clerkClient.users.updateUserMetadata(id, {
+            publicMetadata: {
+              userId: newUser.clerkId,
+            },
+          });
+        } catch (error) {
+          console.error("Error updating user metadata:", error);
+        }
+      }
+
+      return NextResponse.json(
+        { message: "OK", user: newUser },
+        { status: 201 }
+      );
     }
 
-    return NextResponse.json({ message: "OK", user: newUser });
+    // Handle the user updated event
+    if (eventType === "user.updated") {
+      const { id, image_url, first_name, last_name, username } =
+        evt.data as UserUpdatedEventData;
+
+      const user: Partial<User> = {
+        firstName: first_name ?? "",
+        lastName: last_name ?? "",
+        username: username ?? "Anonymous",
+        photo: image_url ?? "",
+      };
+
+      const updatedUser = await updateUser(id, user);
+
+      return NextResponse.json(
+        { message: "OK", user: updatedUser },
+        { status: 200 }
+      );
+    }
+
+    // Handle the user deleted event
+    if (eventType === "user.deleted") {
+      const { id } = evt.data as UserDeletedEventData;
+
+      const deletedUser = await deleteUser(id);
+
+      return NextResponse.json(
+        { message: "OK", user: deletedUser },
+        { status: 200 }
+      );
+    }
+
+    // Log unhandled events
+    console.log(`Unhandled event: ${eventType} with an ID of ${id}`);
+    console.log("Webhook body:", body);
+  } catch (error) {
+    console.error("Error processing event:", error);
+    return new Response("Error processing event", {
+      status: 500,
+    });
   }
-
-  // Handle the user updated event
-  if (eventType === "user.updated") {
-    const { id, image_url, first_name, last_name, username } =
-      evt.data as UserUpdatedEventData;
-
-    const user: Partial<User> = {
-      firstName: first_name,
-      lastName: last_name,
-      username: username!,
-      photo: image_url,
-    };
-
-    const updatedUser = await updateUser(id, user);
-
-    return NextResponse.json({ message: "OK", user: updatedUser });
-  }
-
-  // Handle the user deleted event
-  if (eventType === "user.deleted") {
-    const { id } = evt.data as UserDeletedEventData;
-
-    const deletedUser = await deleteUser(id);
-
-    return NextResponse.json({ message: "OK", user: deletedUser });
-  }
-
-  // Log unhandled events
-  console.log(`Webhook with an ID of ${id} and type of ${eventType}`);
-  console.log("Webhook body:", body);
 
   return new Response("", { status: 200 });
 }
