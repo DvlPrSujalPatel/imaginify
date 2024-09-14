@@ -1,14 +1,76 @@
-/* eslint-disable camelcase */
-import { clerkClient } from "@clerk/nextjs";
+// Import statements
+import { clerkClient } from "@clerk/nextjs/server";
 import { WebhookEvent } from "@clerk/nextjs/server";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { Webhook } from "svix";
 
-import { createUser, deleteUser, updateUser } from "@/lib/actions/user.action";
+// Define types
+interface EmailAddress {
+  email_address: string;
+}
 
+interface UserCreatedEventData {
+  id: string;
+  email_addresses: EmailAddress[];
+  image_url: string;
+  first_name: string;
+  last_name: string;
+  username: string;
+}
+
+interface UserUpdatedEventData {
+  id: string;
+  image_url: string;
+  first_name: string;
+  last_name: string;
+  username: string;
+}
+
+interface UserDeletedEventData {
+  id: string;
+}
+
+type UserEventData =
+  | UserCreatedEventData
+  | UserUpdatedEventData
+  | UserDeletedEventData;
+
+interface User {
+  clerkId: string;
+  email?: string; // Email may not be present in all cases (e.g., updates)
+  username: string;
+  firstName: string;
+  lastName: string;
+  photo?: string; // Photo may not be present in all cases (e.g., updates)
+}
+
+// Mock implementations of user actions
+// Replace these with actual implementations
+export async function createUser(user: User): Promise<User> {
+  // Your logic to create a user in your system
+  console.log("Creating user:", user);
+  return user; // Replace with actual user creation logic
+}
+
+export async function updateUser(
+  id: string,
+  user: Partial<User>
+): Promise<User> {
+  // Your logic to update a user in your system
+  console.log("Updating user:", id, user);
+  return { ...user, clerkId: id } as User; // Replace with actual user update logic
+}
+
+export async function deleteUser(id: string): Promise<User> {
+  // Your logic to delete a user in your system
+  console.log("Deleting user:", id);
+  return { clerkId: id, username: "deleted", firstName: "", lastName: "" }; // Replace with actual user deletion logic
+}
+
+// Webhook handling function
 export async function POST(req: Request) {
-  // You can find this in the Clerk Dashboard -> Webhooks -> choose the webhook
+  // Get the webhook secret from environment variables
   const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
   if (!WEBHOOK_SECRET) {
@@ -23,18 +85,18 @@ export async function POST(req: Request) {
   const svix_timestamp = headerPayload.get("svix-timestamp");
   const svix_signature = headerPayload.get("svix-signature");
 
-  // If there are no headers, error out
+  // If any required headers are missing, return an error
   if (!svix_id || !svix_timestamp || !svix_signature) {
-    return new Response("Error occured -- no svix headers", {
+    return new Response("Error occurred -- no svix headers", {
       status: 400,
     });
   }
 
-  // Get the body
+  // Get the request body
   const payload = await req.json();
   const body = JSON.stringify(payload);
 
-  // Create a new Svix instance with your secret.
+  // Create a new Svix instance with your secret
   const wh = new Webhook(WEBHOOK_SECRET);
 
   let evt: WebhookEvent;
@@ -48,21 +110,21 @@ export async function POST(req: Request) {
     }) as WebhookEvent;
   } catch (err) {
     console.error("Error verifying webhook:", err);
-    return new Response("Error occured", {
+    return new Response("Error occurred", {
       status: 400,
     });
   }
 
-  // Get the ID and type
+  // Get the ID and type from the event
   const { id } = evt.data;
   const eventType = evt.type;
 
-  // CREATE
+  // Handle the user created event
   if (eventType === "user.created") {
     const { id, email_addresses, image_url, first_name, last_name, username } =
-      evt.data;
+      evt.data as UserCreatedEventData;
 
-    const user = {
+    const user: User = {
       clerkId: id,
       email: email_addresses[0].email_address,
       username: username!,
@@ -77,7 +139,7 @@ export async function POST(req: Request) {
     if (newUser) {
       await clerkClient.users.updateUserMetadata(id, {
         publicMetadata: {
-          userId: newUser._id,
+          userId: newUser.clerkId,
         },
       });
     }
@@ -85,11 +147,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "OK", user: newUser });
   }
 
-  // UPDATE
+  // Handle the user updated event
   if (eventType === "user.updated") {
-    const { id, image_url, first_name, last_name, username } = evt.data;
+    const { id, image_url, first_name, last_name, username } =
+      evt.data as UserUpdatedEventData;
 
-    const user = {
+    const user: Partial<User> = {
       firstName: first_name,
       lastName: last_name,
       username: username!,
@@ -101,16 +164,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "OK", user: updatedUser });
   }
 
-  // DELETE
+  // Handle the user deleted event
   if (eventType === "user.deleted") {
-    const { id } = evt.data;
+    const { id } = evt.data as UserDeletedEventData;
 
-    const deletedUser = await deleteUser(id!);
+    const deletedUser = await deleteUser(id);
 
     return NextResponse.json({ message: "OK", user: deletedUser });
   }
 
-  console.log(`Webhook with and ID of ${id} and type of ${eventType}`);
+  // Log unhandled events
+  console.log(`Webhook with an ID of ${id} and type of ${eventType}`);
   console.log("Webhook body:", body);
 
   return new Response("", { status: 200 });
